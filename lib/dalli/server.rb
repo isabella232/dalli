@@ -219,7 +219,10 @@ module Dalli
     end
 
     def delete(key, cas)
-      raise NotImplementedError
+      command = %w(md) << key
+      command << "C#{cas}" if cas > 0
+      write_command(command)
+      read_response
     end
 
     def flush(ttl)
@@ -439,6 +442,8 @@ module Dalli
       case type
       when 'OK'
         true
+      when 'EN' # Miss
+        nil
       when 'VA'
         bytesize = elements.shift.to_i
         value = read(bytesize + 2)
@@ -466,7 +471,7 @@ module Dalli
           raise DalliError, elements.join(' ')
         end
       else
-        raise NotImplementedError, "Unknown response type: #{type.inspect}"
+        raise NotImplementedError, "Unknown response type: #{type.inspect} #{elements.join(' ')}"
       end
     end
 
