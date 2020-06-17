@@ -119,87 +119,6 @@ module Dalli
       @options[:compressor]
     end
 
-    # Start reading key/value pairs from this connection. This is usually called
-    # after a series of GETKQ commands. A NOOP is sent, and the server begins
-    # flushing responses for kv pairs that were found.
-    #
-    # Returns nothing.
-    def multi_response_start
-      verify_state
-      write_noop
-      @multi_buffer = String.new('')
-      @position = 0
-      @inprogress = true
-    end
-
-    # Did the last call to #multi_response_start complete successfully?
-    def multi_response_completed?
-      @multi_buffer.nil?
-    end
-
-    # Attempt to receive and parse as many key/value pairs as possible
-    # from this server. After #multi_response_start, this should be invoked
-    # repeatedly whenever this server's socket is readable until
-    # #multi_response_completed?.
-    #
-    # Returns a Hash of kv pairs received.
-    def multi_response_nonblock
-      raise 'multi_response has completed' if @multi_buffer.nil?
-
-      @multi_buffer << @sock.read_available
-      buf = @multi_buffer
-      pos = @position
-      values = {}
-
-      while buf.bytesize - pos >= 24
-        header = buf.slice(pos, 24)
-        (key_length, _, body_length, cas) = header.unpack(KV_HEADER)
-
-        if key_length == 0
-          # all done!
-          @multi_buffer = nil
-          @position = nil
-          @inprogress = false
-          break
-
-        elsif buf.bytesize - pos >= 24 + body_length
-          flags = buf.slice(pos + 24, 4).unpack('N')[0]
-          key = buf.slice(pos + 24 + 4, key_length)
-          value = buf.slice(pos + 24 + 4 + key_length, body_length - key_length - 4) if body_length - key_length - 4 > 0
-
-          pos = pos + 24 + body_length
-
-          begin
-            values[key] = [deserialize(value, flags), cas]
-          rescue DalliError
-          end
-
-        else
-          # not enough data yet, wait for more
-          break
-        end
-      end
-      @position = pos
-
-      values
-    rescue SystemCallError, Timeout::Error, EOFError => e
-      failure!(e)
-    end
-
-    # Abort an earlier #multi_response_start. Used to signal an external
-    # timeout. The underlying socket is disconnected, and the exception is
-    # swallowed.
-    #
-    # Returns nothing.
-    def multi_response_abort
-      @multi_buffer = nil
-      @position = nil
-      @inprogress = false
-      failure!(RuntimeError.new('External timeout'))
-    rescue NetworkError
-      true
-    end
-
     # NOTE: Additional public methods should be overridden in Dalli::Threadsafe
 
     private
@@ -267,136 +186,77 @@ module Dalli
     end
 
     def get(key, options=nil)
-      req = [REQUEST, OPCODES[:get], key.bytesize, 0, 0, 0, key.bytesize, 0, 0, key].pack(FORMAT[:get])
-      write(req)
-      generic_response(true, !!(options && options.is_a?(Hash) && options[:cache_nils]))
+      raise NotImplementedError
     end
 
     def send_multiget(keys)
-      req = String.new("")
-      keys.each do |key|
-        req << [REQUEST, OPCODES[:getkq], key.bytesize, 0, 0, 0, key.bytesize, 0, 0, key].pack(FORMAT[:getkq])
-      end
-      # Could send noop here instead of in multi_response_start
-      write(req)
+      raise NotImplementedError
     end
 
     def set(key, value, ttl, cas, options)
-      (value, flags) = serialize(key, value, options)
-      ttl = sanitize_ttl(ttl)
-
-      guard_max_value(key, value) do
-        req = [REQUEST, OPCODES[multi? ? :setq : :set], key.bytesize, 8, 0, 0, value.bytesize + key.bytesize + 8, 0, cas, flags, ttl, key, value].pack(FORMAT[:set])
-        write(req)
-        cas_response unless multi?
-      end
+      raise NotImplementedError
     end
 
     def add(key, value, ttl, options)
-      (value, flags) = serialize(key, value, options)
-      ttl = sanitize_ttl(ttl)
-
-      guard_max_value(key, value) do
-        req = [REQUEST, OPCODES[multi? ? :addq : :add], key.bytesize, 8, 0, 0, value.bytesize + key.bytesize + 8, 0, 0, flags, ttl, key, value].pack(FORMAT[:add])
-        write(req)
-        cas_response unless multi?
-      end
+      raise NotImplementedError
     end
 
     def replace(key, value, ttl, cas, options)
-      (value, flags) = serialize(key, value, options)
-      ttl = sanitize_ttl(ttl)
-
-      guard_max_value(key, value) do
-        req = [REQUEST, OPCODES[multi? ? :replaceq : :replace], key.bytesize, 8, 0, 0, value.bytesize + key.bytesize + 8, 0, cas, flags, ttl, key, value].pack(FORMAT[:replace])
-        write(req)
-        cas_response unless multi?
-      end
+      raise NotImplementedError
     end
 
     def delete(key, cas)
-      req = [REQUEST, OPCODES[multi? ? :deleteq : :delete], key.bytesize, 0, 0, 0, key.bytesize, 0, cas, key].pack(FORMAT[:delete])
-      write(req)
-      generic_response unless multi?
+      raise NotImplementedError
     end
 
     def flush(ttl)
-      req = [REQUEST, OPCODES[:flush], 0, 4, 0, 0, 4, 0, 0, 0].pack(FORMAT[:flush])
-      write(req)
-      generic_response
+      raise NotImplementedError
     end
 
     def decr_incr(opcode, key, count, ttl, default)
-      expiry = default ? sanitize_ttl(ttl) : 0xFFFFFFFF
-      default ||= 0
-      (h, l) = split(count)
-      (dh, dl) = split(default)
-      req = [REQUEST, OPCODES[opcode], key.bytesize, 20, 0, 0, key.bytesize + 20, 0, 0, h, l, dh, dl, expiry, key].pack(FORMAT[opcode])
-      write(req)
-      body = generic_response
-      body ? body.unpack('Q>').first : body
+      raise NotImplementedError
     end
 
     def decr(key, count, ttl, default)
-      decr_incr :decr, key, count, ttl, default
+      raise NotImplementedError
     end
 
     def incr(key, count, ttl, default)
-      decr_incr :incr, key, count, ttl, default
-    end
-
-    def write_append_prepend(opcode, key, value)
-      write_generic [REQUEST, OPCODES[opcode], key.bytesize, 0, 0, 0, value.bytesize + key.bytesize, 0, 0, key, value].pack(FORMAT[opcode])
-    end
-
-    def write_generic(bytes)
-      write(bytes)
-      generic_response
-    end
-
-    def write_noop
-      req = [REQUEST, OPCODES[:noop], 0, 0, 0, 0, 0, 0, 0].pack(FORMAT[:noop])
-      write(req)
+      raise NotImplementedError
     end
 
     # Noop is a keepalive operation but also used to demarcate the end of a set of pipelined commands.
     # We need to read all the responses at once.
     def noop
-      write_noop
-      multi_response
+      raise NotImplementedError
     end
 
     def append(key, value)
-      write_append_prepend :append, key, value
+      raise NotImplementedError
     end
 
     def prepend(key, value)
-      write_append_prepend :prepend, key, value
+      raise NotImplementedError
     end
 
     def stats(info='')
-      req = [REQUEST, OPCODES[:stat], info.bytesize, 0, 0, 0, info.bytesize, 0, 0, info].pack(FORMAT[:stat])
-      write(req)
-      keyvalue_response
+      raise NotImplementedError
     end
 
     def reset_stats
-      write_generic [REQUEST, OPCODES[:stat], 'reset'.bytesize, 0, 0, 0, 'reset'.bytesize, 0, 0, 'reset'].pack(FORMAT[:stat])
+      raise NotImplementedError
     end
 
     def cas(key)
-      req = [REQUEST, OPCODES[:get], key.bytesize, 0, 0, 0, key.bytesize, 0, 0, key].pack(FORMAT[:get])
-      write(req)
-      data_cas_response
+      raise NotImplementedError
     end
 
     def version
-      write_generic [REQUEST, OPCODES[:version], 0, 0, 0, 0, 0, 0, 0].pack(FORMAT[:noop])
+      raise NotImplementedError
     end
 
     def touch(key, ttl)
-      ttl = sanitize_ttl(ttl)
-      write_generic [REQUEST, OPCODES[:touch], key.bytesize, 4, 0, 0, key.bytesize + 4, 0, 0, ttl, key].pack(FORMAT[:touch])
+      raise NotImplementedError
     end
 
     # http://www.hjp.at/zettel/m/memcached_flags.rxml
@@ -453,25 +313,6 @@ module Dalli
     rescue Zlib::Error
       raise UnmarshalError, "Unable to uncompress value: #{$!.message}"
     end
-
-    def data_cas_response
-      (extras, _, status, count, _, cas) = read_header.unpack(CAS_HEADER)
-      data = read(count) if count > 0
-      if status == 1
-        nil
-      elsif status != 0
-        raise Dalli::DalliError, "Response error #{status}: #{RESPONSE_CODES[status]}"
-      elsif data
-        flags = data[0...extras].unpack('N')[0]
-        value = data[extras..-1]
-        data = deserialize(value, flags)
-      end
-      [data, cas]
-    end
-
-    CAS_HEADER = '@4CCnNNQ'
-    NORMAL_HEADER = '@4CCnN'
-    KV_HEADER = '@2n@6nN@16Q'
 
     def guard_max_value(key, value)
       if value.bytesize <= @options[:value_max_bytes]
@@ -578,10 +419,6 @@ module Dalli
       end
     end
 
-    def read_header
-      read(24) || raise(Dalli::NetworkError, 'No response')
-    end
-
     def connect
       Dalli.logger.debug { "Dalli::Server#connect #{name}" }
 
@@ -602,13 +439,6 @@ module Dalli
         failure!(e)
       end
     end
-
-    def split(n)
-      [n >> 32, 0xFFFFFFFF & n]
-    end
-
-    REQUEST = 0x80
-    RESPONSE = 0x81
 
     # Response codes taken from:
     # https://github.com/memcached/memcached/wiki/BinaryProtocolRevamped#response-status
@@ -632,56 +462,6 @@ module Dalli
       0x86 => 'Temporary failure'
     }
 
-    OPCODES = {
-      :get => 0x00,
-      :set => 0x01,
-      :add => 0x02,
-      :replace => 0x03,
-      :delete => 0x04,
-      :incr => 0x05,
-      :decr => 0x06,
-      :flush => 0x08,
-      :noop => 0x0A,
-      :version => 0x0B,
-      :getkq => 0x0D,
-      :append => 0x0E,
-      :prepend => 0x0F,
-      :stat => 0x10,
-      :setq => 0x11,
-      :addq => 0x12,
-      :replaceq => 0x13,
-      :deleteq => 0x14,
-      :incrq => 0x15,
-      :decrq => 0x16,
-      :auth_negotiation => 0x20,
-      :auth_request => 0x21,
-      :auth_continue => 0x22,
-      :touch => 0x1C,
-    }
-
-    HEADER = "CCnCCnNNQ"
-    OP_FORMAT = {
-      :get => 'a*',
-      :set => 'NNa*a*',
-      :add => 'NNa*a*',
-      :replace => 'NNa*a*',
-      :delete => 'a*',
-      :incr => 'NNNNNa*',
-      :decr => 'NNNNNa*',
-      :flush => 'N',
-      :noop => '',
-      :getkq => 'a*',
-      :version => '',
-      :stat => 'a*',
-      :append => 'a*a*',
-      :prepend => 'a*a*',
-      :auth_request => 'a*a*',
-      :auth_continue => 'a*a*',
-      :touch => 'Na*',
-    }
-    FORMAT = OP_FORMAT.inject({}) { |memo, (k, v)| memo[k] = HEADER + v; memo }
-
-
     #######
     # SASL authentication support for NorthScale
     #######
@@ -700,33 +480,7 @@ module Dalli
 
     def sasl_authentication
       Dalli.logger.info { "Dalli/SASL authenticating as #{username}" }
-
-      # negotiate
-      req = [REQUEST, OPCODES[:auth_negotiation], 0, 0, 0, 0, 0, 0, 0].pack(FORMAT[:noop])
-      write(req)
-
-      (extras, _type, status, count) = read_header.unpack(NORMAL_HEADER)
-      raise Dalli::NetworkError, "Unexpected message format: #{extras} #{count}" unless extras == 0 && count > 0
-      content = read(count).gsub(/\u0000/, ' ')
-      return (Dalli.logger.debug("Authentication not required/supported by server")) if status == 0x81
-      mechanisms = content.split(' ')
-      raise NotImplementedError, "Dalli only supports the PLAIN authentication mechanism" if !mechanisms.include?('PLAIN')
-
-      # request
-      mechanism = 'PLAIN'
-      msg = "\x0#{username}\x0#{password}"
-      req = [REQUEST, OPCODES[:auth_request], mechanism.bytesize, 0, 0, 0, mechanism.bytesize + msg.bytesize, 0, 0, mechanism, msg].pack(FORMAT[:auth_request])
-      write(req)
-
-      (extras, _type, status, count) = read_header.unpack(NORMAL_HEADER)
-      raise Dalli::NetworkError, "Unexpected message format: #{extras} #{count}" unless extras == 0 && count > 0
-      content = read(count)
-      return Dalli.logger.info("Dalli/SASL: #{content}") if status == 0
-
-      raise Dalli::DalliError, "Error authenticating: #{status}" unless status == 0x21
-      raise NotImplementedError, "No two-step authentication mechanisms supported"
-      # (step, msg) = sasl.receive('challenge', content)
-      # raise Dalli::NetworkError, "Authentication failed" if sasl.failed? || step != 'response'
+      raise NotImplementedError
     end
 
     def parse_hostname(str)
