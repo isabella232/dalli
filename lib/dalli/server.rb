@@ -186,11 +186,9 @@ module Dalli
     end
 
     def get(key, options=nil)
-      raise NotImplementedError, "No get options support just yet" if options
-
       command = %w(mg) << key << "v" << "f"
       write_command(command)
-      read_response(unpack: true)
+      read_response(unpack: true, cache_nils: options && options[:cache_nils])
     end
 
     def send_multiget(keys)
@@ -230,16 +228,22 @@ module Dalli
       read_response
     end
 
-    def decr_incr(opcode, key, count, ttl, default)
-      raise NotImplementedError
+    def decr_incr(mode, key, count, ttl, default)
+      ttl = sanitize_ttl(ttl)
+      command = %w(ma) << key << "v" << "M#{mode}" << "D#{count}" << "T#{ttl}"
+      command << "J#{default}" << "N#{ttl}" if default
+
+      write_command(command)
+      value = read_response
+      value ? value.to_i : value
     end
 
     def decr(key, count, ttl, default)
-      raise NotImplementedError
+      decr_incr('-', key, count, ttl, default)
     end
 
     def incr(key, count, ttl, default)
-      raise NotImplementedError
+      decr_incr('+', key, count, ttl, default)
     end
 
     # Noop is a keepalive operation but also used to demarcate the end of a set of pipelined commands.
@@ -442,10 +446,12 @@ module Dalli
         true
       when 'EN' # Miss
         nil
+      when 'NF' # Not Found
+        nil
       when 'VA'
         bytesize = elements.shift.to_i
         value = read(bytesize + 2)
-        value.slice(0, -2)
+        value.chomp!
 
         if unpack
           client_flags = 0
