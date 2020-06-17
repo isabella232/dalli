@@ -195,19 +195,20 @@ module Dalli
       raise NotImplementedError
     end
 
-    def set(key, value, ttl, cas, options)
+    def set(key, value, ttl, cas, options, mode: nil)
       (value, flags) = serialize(key, value, options)
       ttl = sanitize_ttl(ttl)
 
       command = %w(ms) << key << "S#{value.bytesize}" << "T#{ttl}" << "F#{flags}"
       command << "C#{cas}" if cas && cas.to_i > 0
+      command << "M#{mode}" if mode
 
       write_command(command, value)
       read_response
     end
 
     def add(key, value, ttl, options)
-      raise NotImplementedError
+      set(key, value, ttl, nil, options, mode: 'E')
     end
 
     def replace(key, value, ttl, cas, options)
@@ -454,6 +455,8 @@ module Dalli
       when 'EN' # Miss
         nil
       when 'NF' # Not Found
+        nil
+      when 'NS' # Not Set
         nil
       when 'VA'
         bytesize = elements.shift.to_i
