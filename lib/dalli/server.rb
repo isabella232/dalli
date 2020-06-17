@@ -278,7 +278,9 @@ module Dalli
     end
 
     def touch(key, ttl)
-      raise NotImplementedError
+      ttl = sanitize_ttl(ttl)
+      write_command(['mg', key, "T#{ttl}"])
+      read_response
     end
 
     # http://www.hjp.at/zettel/m/memcached_flags.rxml
