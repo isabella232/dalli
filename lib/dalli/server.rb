@@ -187,7 +187,7 @@ module Dalli
 
     def get(key, options=nil)
       command = %w(mg) << key << "v" << "f"
-      write_command(command)
+      write_command(["mg", key, "v", "f"])
       read_response(unpack: true, cache_nils: options && options[:cache_nils])
     end
 
@@ -200,7 +200,7 @@ module Dalli
       ttl = sanitize_ttl(ttl)
 
       command = %w(ms) << key << "S#{value.bytesize}" << "T#{ttl}" << "F#{flags}"
-      command << "C#{cas}" if cas > 0
+      command << "C#{cas}" if cas && cas.to_i > 0
 
       write_command(command, value)
       read_response
@@ -269,7 +269,8 @@ module Dalli
     end
 
     def cas(key)
-      raise NotImplementedError
+      write_command(["mg", key, "v", "c", "f"])
+      read_response(unpack: true, flag: "c")
     end
 
     def version
@@ -439,13 +440,17 @@ module Dalli
       end
     end
 
-    def read_response(unpack: false, cache_nils: false)
+    def read_response(unpack: false, cache_nils: false, flag: nil)
       elements = readline.split
       type = elements.shift
 
       case type
       when 'OK'
-        true
+        if flag
+          [true, extract_flag(elements, flag)]
+        else
+          true
+        end
       when 'EN' # Miss
         nil
       when 'NF' # Not Found
@@ -456,16 +461,14 @@ module Dalli
         value.chomp!
 
         if unpack
-          client_flags = 0
-          flags_token = elements.find { |e| e.start_with?('f') }
-          if flags_token
-            client_flags = Integer(flags_token.slice(1..-1))
-          end
-
-          value = deserialize(value, client_flags)
+          value = deserialize(value, extract_flag(elements, 'f').to_i)
         end
 
-        value
+        if flag
+          [value, extract_flag(elements, flag)]
+        else
+          value
+        end
       when 'VERSION'
         elements.first
       when 'CLIENT_ERROR'
@@ -479,6 +482,12 @@ module Dalli
       else
         raise NotImplementedError, "Unknown response type: #{type.inspect} #{elements.join(' ')}"
       end
+    end
+
+    def extract_flag(elements, flag_name)
+      flag = elements.find { |e| e.start_with?(flag_name) }
+      return unless flag
+      flag[1..-1]
     end
 
     def readline
