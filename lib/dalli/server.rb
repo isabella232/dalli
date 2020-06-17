@@ -267,11 +267,14 @@ module Dalli
     end
 
     def stats(info='')
-      raise NotImplementedError
+      command = %w(stats)
+      command << info unless info.nil? || info.empty?
+      write_command(command)
+      read_response
     end
 
     def reset_stats
-      raise NotImplementedError
+      stats('reset')
     end
 
     def cas(key)
@@ -457,6 +460,8 @@ module Dalli
         else
           true
         end
+      when 'RESET'
+        true
       when 'EN' # Miss
         nil
       when 'NF' # Not Found
@@ -487,6 +492,14 @@ module Dalli
         else
           raise DalliError, elements.join(' ')
         end
+      when 'STAT'
+        stats = {}
+        elements.unshift(type)
+        while elements.first == 'STAT'
+          stats[elements[1]] = elements[2]
+          elements = readline.split
+        end
+        stats
       else
         raise NotImplementedError, "Unknown response type: #{type.inspect} #{elements.join(' ')}"
       end
