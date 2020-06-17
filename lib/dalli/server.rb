@@ -198,10 +198,15 @@ module Dalli
     def set(key, value, ttl, cas, options, mode: nil)
       (value, flags) = serialize(key, value, options)
       ttl = sanitize_ttl(ttl)
+      _raw_set(key, value, ttl: ttl, cas: cas, flags: flags, mode: mode)
+    end
 
-      command = %w(ms) << key << "S#{value.bytesize}" << "T#{ttl}" << "F#{flags}"
-      command << "C#{cas}" if cas && cas.to_i > 0
+    def _raw_set(key, value, ttl: nil, cas: nil, mode: nil, flags: nil)
+      command = ["ms", key, "S#{value.bytesize}"]
       command << "M#{mode}" if mode
+      command << "C#{cas}" if cas && cas.to_i > 0
+      command << "T#{ttl}" if ttl
+      command << "F#{flags}" if flags
 
       write_command(command, value)
       read_response
@@ -212,7 +217,7 @@ module Dalli
     end
 
     def replace(key, value, ttl, cas, options)
-      raise NotImplementedError
+      set(key, value, ttl, nil, options, mode: 'R')
     end
 
     def delete(key, cas)
@@ -254,11 +259,11 @@ module Dalli
     end
 
     def append(key, value)
-      raise NotImplementedError
+      _raw_set(key, value, mode: 'A')
     end
 
     def prepend(key, value)
-      raise NotImplementedError
+      _raw_set(key, value, mode: 'P')
     end
 
     def stats(info='')
@@ -457,7 +462,7 @@ module Dalli
       when 'NF' # Not Found
         nil
       when 'NS' # Not Set
-        nil
+        false
       when 'VA'
         bytesize = elements.shift.to_i
         value = read(bytesize + 2)
