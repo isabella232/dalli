@@ -186,7 +186,11 @@ module Dalli
     end
 
     def get(key, options=nil)
-      raise NotImplementedError
+      raise NotImplementedError, "No get options support just yet" if options
+
+      command = %w(mg) << key << "v" << "f"
+      write_command(command)
+      read_response(unpack: true)
     end
 
     def send_multiget(keys)
@@ -194,7 +198,16 @@ module Dalli
     end
 
     def set(key, value, ttl, cas, options)
-      raise NotImplementedError
+      raise NotImplementedError, "No set options support just yet" if options
+
+      (value, flags) = serialize(key, value, options)
+      ttl = sanitize_ttl(ttl)
+
+      command = %w(ms) << key << "S#{value.bytesize}" << "T#{ttl}" << "F#{flags}"
+      command << "C#{cas}" if cas > 0
+
+      write_command(command, value)
+      read_response
     end
 
     def add(key, value, ttl, options)
@@ -210,7 +223,10 @@ module Dalli
     end
 
     def flush(ttl)
-      raise NotImplementedError
+      command = %w(flush_all)
+      command << ttl.to_i.to_s if ttl
+      write_command(command)
+      read_response
     end
 
     def decr_incr(opcode, key, count, ttl, default)
@@ -252,7 +268,8 @@ module Dalli
     end
 
     def version
-      raise NotImplementedError
+      write_command %w(version)
+      read_response
     end
 
     def touch(key, ttl)
@@ -397,6 +414,13 @@ module Dalli
       end
     end
 
+    def write_command(args, body = nil)
+      buffer = "".b
+      buffer << args.join(' ') << "\r\n"
+      buffer << body << "\r\n" if body
+      write(buffer)
+    end
+
     def write(bytes)
       begin
         @inprogress = true
@@ -404,6 +428,55 @@ module Dalli
         @inprogress = false
         result
       rescue SystemCallError, Timeout::Error => e
+        failure!(e)
+      end
+    end
+
+    def read_response(unpack: false, cache_nils: false)
+      elements = readline.split
+      type = elements.shift
+
+      case type
+      when 'OK'
+        true
+      when 'VA'
+        bytesize = elements.shift.to_i
+        value = read(bytesize + 2)
+        value.slice(0, -2)
+
+        if unpack
+          client_flags = 0
+          flags_token = elements.find { |e| e.start_with?('f') }
+          if flags_token
+            client_flags = Integer(flags_token.slice(1..-1))
+          end
+
+          value = deserialize(value, client_flags)
+        end
+
+        value
+      when 'VERSION'
+        elements.first
+      when 'CLIENT_ERROR'
+        raise DalliError, elements.join(' ')
+      when 'SERVER_ERROR'
+        if elements.join(' ') == "object too large for cache"
+          false
+        else
+          raise DalliError, elements.join(' ')
+        end
+      else
+        raise NotImplementedError, "Unknown response type: #{type.inspect}"
+      end
+    end
+
+    def readline
+      begin
+        @inprogress = true
+        data = @sock.gets
+        @inprogress = false
+        data
+      rescue SystemCallError, Timeout::Error, EOFError => e
         failure!(e)
       end
     end
