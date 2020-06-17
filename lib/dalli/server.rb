@@ -198,8 +198,6 @@ module Dalli
     end
 
     def set(key, value, ttl, cas, options)
-      raise NotImplementedError, "No set options support just yet" if options
-
       (value, flags) = serialize(key, value, options)
       ttl = sanitize_ttl(ttl)
 
@@ -465,7 +463,7 @@ module Dalli
       when 'CLIENT_ERROR'
         raise DalliError, elements.join(' ')
       when 'SERVER_ERROR'
-        if elements.join(' ') == "object too large for cache"
+        if !@options[:error_when_over_max_size] && elements.join(' ') == "object too large for cache"
           false
         else
           raise DalliError, elements.join(' ')
