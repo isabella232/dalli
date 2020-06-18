@@ -257,7 +257,7 @@ module Dalli
     def get(key, options=nil)
       command = %w(mg) << key << "v" << "f"
       write_command(["mg", key, "v", "f"])
-      read_response(unpack: true, cache_nils: options && options[:cache_nils])
+      read_response(unpack: true, cache_nils: options.is_a?(Hash) && options[:cache_nils])
     end
 
     def send_multiget(keys)
@@ -354,7 +354,13 @@ module Dalli
     def cas(key)
       write_command(["mg", key, "v", "c", "f"])
       value, flags = read_response(unpack: true, flags: true)
-      [value, flags && flags['c']]
+      [value, flags && flags['c'].to_i]
+    end
+
+    def cas_value(key)
+      write_command(["mg", key, "c"])
+      success, flags = read_response(unpack: true, flags: true)
+      flags && flags['c'].to_i
     end
 
     def version
@@ -528,7 +534,9 @@ module Dalli
     end
 
     def read_response(unpack: false, cache_nils: false, flags: false, source: self)
-      elements = source.readline.split
+      line = source.readline
+      raise NetworkError unless line
+      elements = line.split
       type = elements.shift
 
       case type
@@ -545,6 +553,8 @@ module Dalli
       when 'NF' # Not Found
         nil
       when 'NS' # Not Set
+        false
+      when 'EX' # Already exists (CAS doesn't match)
         false
       when 'VA'
         bytesize = elements.shift.to_i
@@ -563,7 +573,7 @@ module Dalli
         end
       when 'VERSION'
         elements.first
-      when 'CLIENT_ERROR'
+      when 'CLIENT_ERROR', 'ERROR'
         raise DalliError, elements.join(' ')
       when 'SERVER_ERROR'
         if !@options[:error_when_over_max_size] && elements.join(' ') == "object too large for cache"
