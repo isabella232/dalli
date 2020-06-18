@@ -517,6 +517,7 @@ module Dalli
     end
 
     def build_command(args, body = nil, buffer: "".b)
+      args.map! { |a| a.ascii_only? ? a : a.b }
       buffer << args.join(' ') << "\r\n"
       buffer << body << "\r\n" if body
       buffer
