@@ -149,6 +149,8 @@ module Dalli
         end
       end
       values
+    rescue SystemCallError, Timeout::Error, EOFError => e
+      failure!(e)
     end
 
     protected
@@ -186,6 +188,8 @@ module Dalli
           return
         when String
           @multi_buffer << chunk
+        when nil # EOF
+          raise EOFError
         else
           raise "This should not happen: #{chunk.inspect}"
         end
