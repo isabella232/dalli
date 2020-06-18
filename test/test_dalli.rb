@@ -44,6 +44,7 @@ describe 'Dalli' do
 
   describe 'key validation' do
     it 'not allow blanks' do
+      skip("meta command protocol do not allow blanks inside keys")
       memcached_persistent do |dc|
         dc.set '   ', 1
         assert_equal 1, dc.get('   ')
