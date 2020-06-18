@@ -121,7 +121,76 @@ module Dalli
 
     # NOTE: Additional public methods should be overridden in Dalli::Threadsafe
 
+    def multi_response_start
+      # noop
+    end
+
+    def multi_response_abort
+      @expected_responses = 0
+      @multi_buffer = nil
+    end
+
+    def multi_response_completed?
+      @expected_responses = 0
+    end
+
+    def multi_response_nonblock
+      @multi_buffer ||= StringIO.new("".b).binmode
+      fill_multi_buffer # read as much responses as possible
+      values = {}
+
+      until @expected_responses == 0 || @multi_buffer.eof?
+        value, flags = read_response(unpack: true, flags: true, source: @multi_buffer)
+        @expected_responses -= 1
+        next unless flags # miss
+
+        if key = flags['k']
+          values[key] = [value, flags['c'].to_i]
+        end
+      end
+      values
+    end
+
+    protected
+
+    def readline
+      begin
+        @inprogress = true
+        data = @sock.gets
+        @inprogress = false
+        data
+      rescue SystemCallError, Timeout::Error, EOFError => e
+        failure!(e)
+      end
+    end
+
+    def read(count)
+      begin
+        @inprogress = true
+        data = @sock.readfull(count)
+        @inprogress = false
+        data
+      rescue SystemCallError, Timeout::Error, EOFError => e
+        failure!(e)
+      end
+    end
+
     private
+
+    def fill_multi_buffer
+      pos = @multi_buffer.pos
+      loop do
+        case chunk = @sock.read_nonblock(16_384, exception: false)
+        when :wait_readable
+          @multi_buffer.seek(pos)
+          return
+        when String
+          @multi_buffer << chunk
+        else
+          raise "This should not happen: #{chunk.inspect}"
+        end
+      end
+    end
 
     def verify_state
       failure!(RuntimeError.new('Already writing to socket')) if @inprogress
@@ -192,7 +261,12 @@ module Dalli
     end
 
     def send_multiget(keys)
-      raise NotImplementedError
+      buffer = "".b
+      keys.each do |key|
+        build_command(['mg', key, "v", "f", "k", "c"], buffer: buffer)
+      end
+      write(buffer)
+      @expected_responses = keys.size
     end
 
     def set(key, value, ttl, cas, options, mode: nil)
@@ -279,7 +353,8 @@ module Dalli
 
     def cas(key)
       write_command(["mg", key, "v", "c", "f"])
-      read_response(unpack: true, flag: "c")
+      value, flags = read_response(unpack: true, flags: true)
+      [value, flags && flags['c']]
     end
 
     def version
@@ -432,10 +507,13 @@ module Dalli
     end
 
     def write_command(args, body = nil)
-      buffer = "".b
+      write(build_command(args, body))
+    end
+
+    def build_command(args, body = nil, buffer: "".b)
       buffer << args.join(' ') << "\r\n"
       buffer << body << "\r\n" if body
-      write(buffer)
+      buffer
     end
 
     def write(bytes)
@@ -449,14 +527,14 @@ module Dalli
       end
     end
 
-    def read_response(unpack: false, cache_nils: false, flag: nil)
-      elements = readline.split
+    def read_response(unpack: false, cache_nils: false, flags: false, source: self)
+      elements = source.readline.split
       type = elements.shift
 
       case type
       when 'OK'
-        if flag
-          [true, extract_flag(elements, flag)]
+        if flags
+          [true, parse_flags(elements)]
         else
           true
         end
@@ -470,15 +548,16 @@ module Dalli
         false
       when 'VA'
         bytesize = elements.shift.to_i
-        value = read(bytesize + 2)
+        value = source.read(bytesize + 2)
         value.chomp!
 
         if unpack
-          value = deserialize(value, extract_flag(elements, 'f').to_i)
+          client_flags = extract_flag!(elements, 'f').to_i
+          value = deserialize(value, client_flags)
         end
 
-        if flag
-          [value, extract_flag(elements, flag)]
+        if flags
+          [value, parse_flags(elements)]
         else
           value
         end
@@ -505,31 +584,23 @@ module Dalli
       end
     end
 
-    def extract_flag(elements, flag_name)
-      flag = elements.find { |e| e.start_with?(flag_name) }
-      return unless flag
-      flag[1..-1]
+    def extract_flag!(elements, flag_name)
+      index = elements.find_index { |e| e.start_with?(flag_name) }
+      return unless index
+      token = elements.delete_at(index)
+      return unless token
+      token.slice!(0, 1)
+      token
     end
 
-    def readline
-      begin
-        @inprogress = true
-        data = @sock.gets
-        @inprogress = false
-        data
-      rescue SystemCallError, Timeout::Error, EOFError => e
-        failure!(e)
-      end
-    end
+    EMPTY_HASH = {}.freeze
+    private_constant :EMPTY_HASH
+    def parse_flags(elements)
+      return EMPTY_HASH if elements.empty?
 
-    def read(count)
-      begin
-        @inprogress = true
-        data = @sock.readfull(count)
-        @inprogress = false
-        data
-      rescue SystemCallError, Timeout::Error, EOFError => e
-        failure!(e)
+      elements.each_with_object({}) do |token, flags|
+        key = token.slice!(0, 1)
+        flags[key] = token
       end
     end
 
