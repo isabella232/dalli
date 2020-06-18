@@ -680,7 +680,7 @@ describe 'Dalli' do
     it 'truncate cache keys that are too long' do
       memcached_persistent do |dc, port|
         dc = Dalli::Client.new("localhost:#{port}", :namespace => 'some:namspace')
-        key = "this cache key is far too long so it must be hashed and truncated and stuff" * 10
+        key = "this cache key is far too long so it must be hashed and truncated and stuff".tr(' ', '_') * 10
         value = "some value"
         assert op_addset_succeeds(dc.set(key, value))
         assert_equal value, dc.get(key)
